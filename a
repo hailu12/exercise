@@ -1,1 +1,229 @@
 
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using Microsoft.Xrm.Sdk;
+using Microsoft.Xrm.Sdk.Query;
+
+namespace SetOpportunityFields
+{
+    public class GetPriceList : IPlugin
+    {
+        public void Execute(IServiceProvider serviceProvider)
+        {
+            #region Create Plug-in context and IOrganization Service
+            IPluginExecutionContext context = (IPluginExecutionContext)serviceProvider.GetService(typeof(IPluginExecutionContext));
+            IOrganizationServiceFactory servicefactory = (IOrganizationServiceFactory)serviceProvider.GetService(typeof(IOrganizationServiceFactory));
+            IOrganizationService service = servicefactory.CreateOrganizationService(context.UserId);
+            ITracingService tracingService = (ITracingService)serviceProvider.GetService(typeof(ITracingService));
+            if (context.Depth > 1)
+                return;
+            #endregion
+
+
+            Opportunity opportunity = new Opportunity();
+            opportunity = (Opportunity)service.Retrieve(context.PrimaryEntityName, context.PrimaryEntityId, new ColumnSet(true));
+
+            // To set the default price list field of opportunity to "MAIN"
+
+            if (opportunity != null && opportunity.PriceLevelId == null)
+            {
+                PriceLevel pricelevel = null;
+                var nameCondition = new ConditionExpression
+                {
+                    AttributeName = "name",
+                    Operator = ConditionOperator.Equal,
+                    Values = { "MAIN" }
+                };
+
+                var stateCodeCondition = new ConditionExpression
+                {
+                    AttributeName = "statecode",
+                    Operator = ConditionOperator.Equal,
+                    Values = { 0 }
+                };
+
+                var query = new QueryExpression
+                {
+                    EntityName = PriceLevel.EntityLogicalName,
+                    ColumnSet = new ColumnSet("name"),
+                    Criteria = new FilterExpression
+                    {
+                        FilterOperator = LogicalOperator.And,
+                        Conditions =
+                    {
+                        nameCondition,
+                        stateCodeCondition
+                    }
+                    }
+                };
+
+                var pricelevels =
+                    service.RetrieveMultiple(query)
+                        .Entities.Select(item => item.ToEntity<PriceLevel>())
+                        .ToList();
+
+
+                pricelevel = pricelevels.Count > 0 ? pricelevels[0] : null;
+
+                Guid ID = pricelevel.Id;
+
+                if (pricelevel != null)
+                {
+                    opportunity.PriceLevelId = pricelevel.ToEntityReference();
+                }
+                service.Update(opportunity);
+            }
+
+            // To fill the contact and the phone number fields of the opportunity 
+
+            if (opportunity.OriginatingLeadId == null) { return; }
+            Contact contact = null;
+            var contactCondition = new ConditionExpression
+            {
+                AttributeName = "originatingleadid", 
+                Operator = ConditionOperator.Equal,
+                Values = { opportunity.OriginatingLeadId.Id }
+            };
+
+            var stateCodeForAcountCondition = new ConditionExpression
+            {
+                AttributeName = "statecode",
+                Operator = ConditionOperator.Equal,
+                Values = { 0 }
+            };
+
+            var queryContact = new QueryExpression
+            {
+                EntityName = Contact.EntityLogicalName,
+                ColumnSet = new ColumnSet("fullname", "telephone1"),
+                Criteria = new FilterExpression
+                {
+                    FilterOperator = LogicalOperator.And,
+                    Conditions =
+                    {
+                        contactCondition,
+                        stateCodeForAcountCondition
+                    }
+                }
+            };
+
+            var contacts =
+                service.RetrieveMultiple(queryContact)
+                    .Entities.Select(item => item.ToEntity<Contact>())
+                    .ToList();
+
+            contact = contacts.Count > 0 ? contacts[0] : null;
+
+            if (contact != null)
+            {
+                opportunity.ParentContactId = contact.ToEntityReference();
+                opportunity.dyn_BusinessPhone = contact.Telephone1;
+            }
+            service.Update(opportunity);
+        }
+    }
+}
+
+
+
+
+
+###############    Java Script that i was build    #######################
+
+ #### thsi java script sets the appointment fields location from the
+       crrosponding lead acount or opportunity entity
+
+
+
+function appointment_onload() {
+
+    var FORM_TYPE_CREATE = 1;
+
+    //get the form type
+    var formType = Xrm.Page.ui.getFormType();
+
+    //which form type do we want to work with?
+    switch (formType) {
+        case FORM_TYPE_CREATE:
+            OnFormLoadCreate();
+            break;
+    }
+}
+function OnFormLoadCreate() {
+    FillAppointmentFields();
+   
+}
+
+
+function FillAppointmentFields() {
+    if (Xrm.Page.getAttribute("location").getValue() == null && Xrm.Page.getAttribute("regardingobjectid").getValue() != null) {
+        var regardingObject = Xrm.Page.getAttribute("regardingobjectid").getValue()[0];
+        var cols = ["primarycontactid"];
+
+        if (regardingObject.entityType == "account" || regardingObject.entityType == "contact" || regardingObject.entityType == "lead") {
+            SetAppointmentLocation(regardingObject.entityType, regardingObject.id);
+        }
+
+        if (regardingObject.entityType == "opportunity") {
+            var cols = ["customerid"];
+
+            var retrievedOpportunity = XrmServiceToolkit.Soap.Retrieve(regardingObject.entityType, regardingObject.id, cols);
+
+            if (retrievedOpportunity.attributes["customerid"] != null) {
+                var entitytype = retrievedOpportunity.attributes['customerid'].logicalName;
+                var entityid = retrievedOpportunity.attributes['customerid'].id;
+                var entityname = retrievedOpportunity.attributes['customerid'].name;
+                SetAppointmentLocation(entitytype, entityid);
+
+            }
+
+        }
+    }
+}
+
+
+function SetAppointmentLocation(entitytype, entityid) {
+
+    var columnSet = ["address1_name", "address1_line1", "address1_line2", "address1_line3",
+                                "address1_city", "address1_stateorprovince", "address1_postalcode"];
+
+    var location = XrmServiceToolkit.Soap.Retrieve(entitytype, entityid, columnSet);
+
+    var locationstring = "";
+
+    if (location.attributes["address1_line1"] != null) {
+        locationstring += location.attributes["address1_line1"].value;
+    }
+
+    if (location.attributes["address1_line2"] != null) {
+        locationstring += " " + location.attributes["address1_line2"].value;
+    }
+
+    if (location.attributes["address1_line3"] != null) {
+        locationstring += " " + location.attributes["address1_line3"].value;
+    }
+
+    if (location.attributes["address1_city"] != null) {
+        locationstring += ", " + location.attributes['address1_city'].value;
+    }
+
+    if (location.attributes["address1_stateorprovince"] != null) {
+        locationstring += ", " + location.attributes["address1_stateorprovince"].value;
+    }
+
+    if (location.attributes["address1_postalcode"] != null) {
+        locationstring += " " + location.attributes["address1_postalcode"].value;
+    }
+
+    if (locationstring.length > 0) {
+        Xrm.Page.getAttribute("location").setValue(locationstring);
+    }
+
+}
+
+
+
+
